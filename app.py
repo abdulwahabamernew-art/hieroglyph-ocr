@@ -1,7 +1,7 @@
 """
 Hieroglyph OCR — End-to-End Web Demo (YOLO26n + TrOCR)
-تطبيق الواجهة التفاعلية لمنصة Hugging Face Spaces
-مرتبط مباشرة بمستودع نماذجك: Bin-Amer/hieroglyph-ocr-models
+تطبيق الواجهة التفاعلية لمنصة Hugging Face Spaces (متوافق مع ZeroGPU و CPU)
+مرتبط بمستودع نماذجك: Bin-Amer/hieroglyph-ocr-models
 """
 
 from datetime import datetime
@@ -20,6 +20,22 @@ from PIL import Image
 import torch
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from ultralytics import YOLO
+
+# ============================================================================
+# دعم Hugging Face ZeroGPU تلقائياً لحل مشكلة Runtime error
+# ============================================================================
+try:
+    import spaces
+    HAS_SPACES = True
+except ImportError:
+    HAS_SPACES = False
+    class spaces:
+        @staticmethod
+        def GPU(func=None, **kwargs):
+            if func is None:
+                return lambda f: f
+            return func
+
 
 # ============================================================================
 # 1. إعدادات المستودع وتحميل النماذج
@@ -45,19 +61,16 @@ KNOWN_GARDINER_CODES = {
     "T14", "T20", "T21", "T22", "T28", "T30", "U1", "U7", "U15", "U28",
     "U33", "U35", "V4", "V6", "V7", "V13", "V16", "V22", "V24", "V25",
     "V28", "V30", "V31", "W11", "W14", "W15", "W18", "W19", "W22", "W24",
-    "W25", "X1", "X6", "X8", "Y1", "Y2", "Y3", "Y5", "Z1", "Z7", "Z11",
+    "W25", "X1", "X6", "X8", "Y1", "Y2", "Y3", "Y5", "Z1", "Z7", "Z11"
 }
-
-DEVICE = 0 if torch.cuda.is_available() else "cpu"
-TORCH_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def load_models():
     """تحميل نموذج YOLO26n ونموذج TrOCR تلقائياً من المستودع."""
     print("⏳ جاري تنزيل وتحميل النماذج من Hugging Face Hub...")
     token = os.getenv("HF_TOKEN", None)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # تحميل كاشف YOLO
     yolo_weights = hf_hub_download(
         repo_id=MODELS_REPO,
         filename=YOLO_FILE_IN_REPO,
@@ -65,17 +78,16 @@ def load_models():
     )
     yolo = YOLO(yolo_weights)
 
-    # تحميل قارئ TrOCR
     proc = TrOCRProcessor.from_pretrained(
         MODELS_REPO, subfolder="trocr_gardiner_v2", token=token
     )
     trocr = VisionEncoderDecoderModel.from_pretrained(
         MODELS_REPO, subfolder="trocr_gardiner_v2", token=token
-    ).to(TORCH_DEVICE)
+    ).to(device)
     trocr.config.use_cache = True
     trocr.eval()
 
-    print("✅ تم تحميل النموذجين بنجاح!")
+    print(f"✅ تم تحميل النموذجين بنجاح على: {device}")
     return yolo, proc, trocr
 
 
@@ -98,16 +110,11 @@ def mild_clahe_bgr(image_bgr: np.ndarray) -> np.ndarray:
     lightness, channel_a, channel_b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=1.6, tileGridSize=(8, 8))
     enhanced_lightness = clahe.apply(lightness)
-    enhanced = cv2.cvtColor(
-        cv2.merge((enhanced_lightness, channel_a, channel_b)),
-        cv2.COLOR_LAB2BGR,
-    )
+    enhanced = cv2.cvtColor(cv2.merge((enhanced_lightness, channel_a, channel_b)), cv2.COLOR_LAB2BGR)
     return cv2.addWeighted(image_bgr, 0.65, enhanced, 0.35, 0)
 
 
-def safe_crop(
-    image_bgr: np.ndarray, box: np.ndarray, padding_ratio: float = 0.06
-) -> np.ndarray:
+def safe_crop(image_bgr: np.ndarray, box: np.ndarray, padding_ratio: float = 0.06) -> np.ndarray:
     height, width = image_bgr.shape[:2]
     x1, y1, x2, y2 = map(float, box)
     pad_x = max(1.0, x2 - x1) * padding_ratio
@@ -123,25 +130,17 @@ def pad_to_square(image: Image.Image) -> Image.Image:
     image = image.convert("RGB")
     side = max(image.size)
     canvas = Image.new("RGB", (side, side), (255, 255, 255))
-    canvas.paste(
-        image, ((side - image.width) // 2, (side - image.height) // 2)
-    )
+    canvas.paste(image, ((side - image.width) // 2, (side - image.height) // 2))
     return canvas
 
 
-def recognize_crop(crop_bgr: np.ndarray) -> str:
+def recognize_crop(crop_bgr: np.ndarray, device: str) -> str:
     crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
     image = pad_to_square(Image.fromarray(crop_rgb))
-    pixel_values = PROCESSOR(
-        images=image, return_tensors="pt"
-    ).pixel_values.to(TORCH_DEVICE)
+    pixel_values = PROCESSOR(images=image, return_tensors="pt").pixel_values.to(device)
     with torch.no_grad():
-        generated = TROCR_MODEL.generate(
-            pixel_values, max_length=12, num_beams=2
-        )
-    return PROCESSOR.batch_decode(generated, skip_special_tokens=True)[
-        0
-    ].strip()
+        generated = TROCR_MODEL.generate(pixel_values, max_length=12, num_beams=2)
+    return PROCESSOR.batch_decode(generated, skip_special_tokens=True)[0].strip()
 
 
 def spatial_order(boxes: np.ndarray) -> list[int]:
@@ -159,26 +158,20 @@ def spatial_order(boxes: np.ndarray) -> list[int]:
 
 
 # ============================================================================
-# 3. خط الأنابيب المتكامل
+# 3. خط الأنابيب المتكامل (مع وسم @spaces.GPU لتسريع المعالجة بكرت الشاشة)
 # ============================================================================
-def run_pipeline(
-    input_image: Image.Image,
-    confidence: float,
-    image_size: int,
-    apply_enhancement: bool,
-):
+@spaces.GPU
+def run_pipeline(input_image: Image.Image, confidence: float, image_size: int, apply_enhancement: bool):
     if input_image is None:
         return None, "⚠️ يرجى رفع صورة أو التقاط صورة بالكاميرا أولاً.", [], "", None
 
     ensure_models_loaded()
+    current_device = "cuda" if torch.cuda.is_available() else "cpu"
+    yolo_device = 0 if current_device == "cuda" else "cpu"
 
     original_rgb = np.array(input_image.convert("RGB"))
     original_bgr = cv2.cvtColor(original_rgb, cv2.COLOR_RGB2BGR)
-    inference_bgr = (
-        mild_clahe_bgr(original_bgr)
-        if apply_enhancement
-        else original_bgr.copy()
-    )
+    inference_bgr = mild_clahe_bgr(original_bgr) if apply_enhancement else original_bgr.copy()
 
     result = YOLO_MODEL.predict(
         source=inference_bgr,
@@ -186,20 +179,12 @@ def run_pipeline(
         conf=float(confidence),
         iou=0.50,
         max_det=1000,
-        device=DEVICE,
+        device=yolo_device,
         verbose=False,
     )[0]
 
-    boxes = (
-        result.boxes.xyxy.cpu().numpy()
-        if result.boxes is not None
-        else np.empty((0, 4))
-    )
-    confidences = (
-        result.boxes.conf.cpu().numpy()
-        if result.boxes is not None
-        else np.empty((0,))
-    )
+    boxes = result.boxes.xyxy.cpu().numpy() if result.boxes is not None else np.empty((0, 4))
+    confidences = result.boxes.conf.cpu().numpy() if result.boxes is not None else np.empty((0,))
     order = spatial_order(boxes)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -218,54 +203,34 @@ def run_pipeline(
         if crop.size == 0:
             continue
 
-        code_text = recognize_crop(crop)
+        code_text = recognize_crop(crop, current_device)
         valid = code_text in KNOWN_GARDINER_CODES
         codes.append(code_text)
 
-        safe_code = (
-            re.sub(r"[^A-Za-z0-9_-]+", "_", code_text).strip("_")[:24]
-            or "EMPTY"
-        )
+        safe_code = re.sub(r"[^A-Za-z0-9_-]+", "_", code_text).strip("_")[:24] or "EMPTY"
         crop_name = f"glyph_{output_index:04d}_{safe_code}_{score:.3f}.jpg"
         crop_path = crops_dir / crop_name
         cv2.imwrite(str(crop_path), crop)
 
         crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-        gallery.append(
-            (
-                Image.fromarray(crop_rgb),
-                f"{output_index}: {code_text} | {score:.2f}",
-            )
-        )
+        gallery.append((Image.fromarray(crop_rgb), f"{output_index}: {code_text} | {score:.2f}"))
 
         x1, y1, x2, y2 = box.astype(int)
         color = (0, 180, 0) if valid else (0, 140, 255)
         cv2.rectangle(rendered, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(
-            rendered,
-            code_text,
-            (x1, max(16, y1 - 4)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            color,
-            2,
-        )
-        records.append(
-            {
-                "index": output_index,
-                "gardiner_code": code_text,
-                "valid_known_code": valid,
-                "detection_confidence": round(score, 6),
-                "xyxy": [round(float(value), 2) for value in box],
-                "crop": f"crops/{crop_name}",
-            }
-        )
+        cv2.putText(rendered, code_text, (x1, max(16, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+        records.append({
+            "index": output_index,
+            "gardiner_code": code_text,
+            "valid_known_code": valid,
+            "detection_confidence": round(score, 6),
+            "xyxy": [round(float(value), 2) for value in box],
+            "crop": f"crops/{crop_name}",
+        })
 
     cv2.imwrite(str(run_dir / "input_original.jpg"), original_bgr)
     if apply_enhancement:
-        cv2.imwrite(
-            str(run_dir / "input_enhanced_for_inference.jpg"), inference_bgr
-        )
+        cv2.imwrite(str(run_dir / "input_enhanced_for_inference.jpg"), inference_bgr)
     cv2.imwrite(str(run_dir / "result.jpg"), rendered)
 
     summary = {
@@ -275,21 +240,13 @@ def run_pipeline(
         "opencv_clahe": bool(apply_enhancement),
         "detections": len(records),
         "spatial_codes": codes,
-        "reading_order_note": (
-            "ترتيب مكاني تقريبي (أعلى إلى أسفل ثم يسار إلى يمين) وليس ترتيباً دلالياً."
-        ),
+        "reading_order_note": "ترتيب مكاني تقريبي (أعلى إلى أسفل ثم يسار إلى يمين) وليس ترتيباً دلالياً.",
         "glyphs": records,
     }
     (run_dir / "result_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    zip_path = Path(
-        shutil.make_archive(
-            str(temp_root / f"hieroglyph_ocr_{timestamp}"),
-            "zip",
-            root_dir=run_dir,
-        )
-    )
+    zip_path = Path(shutil.make_archive(str(temp_root / f"hieroglyph_ocr_{timestamp}"), "zip", root_dir=run_dir))
 
     mean_conf = float(np.mean(confidences)) if len(confidences) else 0.0
     valid_count = sum(record["valid_known_code"] for record in records)
@@ -303,17 +260,11 @@ def run_pipeline(
 - **ملاحظة علمية:** الترتيب المعروض مكاني تقريبي، والنتيجة تحدد أكواد جاردينر القياسية وليست ترجمة دلالية.
 """
     rendered_rgb = cv2.cvtColor(rendered, cv2.COLOR_BGR2RGB)
-    return (
-        Image.fromarray(rendered_rgb),
-        stats,
-        gallery,
-        " ".join(codes),
-        str(zip_path),
-    )
+    return Image.fromarray(rendered_rgb), stats, gallery, " ".join(codes), str(zip_path)
 
 
 # ============================================================================
-# 4. بناء واجهة Gradio
+# 4. واجهة Gradio
 # ============================================================================
 with gr.Blocks(title="Hieroglyph OCR — YOLO26 + TrOCR") as demo:
     gr.Markdown(
