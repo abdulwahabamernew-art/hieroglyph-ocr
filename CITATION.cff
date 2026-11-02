@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+title: "Hieroglyph OCR"
+message: "If you use this project, please cite it or link to the repository."
+type: software
+authors:
+  - family-names: Amer
+    given-names: Abdulwahab
+    affiliation: Independent developer and researcher
+version: 0.1.0
+date-released: 2026-11-03
+repository-code: "https://github.com/abdulwahabamernew-art/hieroglyph-ocr"
+url: "https://huggingface.co/spaces/Bin-Amer/hieroglyph-ocr-demo"
+license: MIT

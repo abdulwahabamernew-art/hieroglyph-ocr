@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hieroglyph-ocr"
+version = "0.1.0"
+description = "End-to-end Egyptian hieroglyph detection and Gardiner-code recognition."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Abdulwahab Amer" }]
+dependencies = [
+  "gradio>=6.31,<7",
+  "huggingface-hub>=0.30",
+  "numpy>=1.26",
+  "opencv-python-headless>=4.10",
+  "Pillow>=10",
+  "torch>=2.2",
+  "transformers>=4.45",
+  "ultralytics>=8.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

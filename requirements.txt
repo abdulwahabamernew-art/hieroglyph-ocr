@@ -1,3 +1,8 @@
-ultralytics
-transformers
-opencv-python-headless
+gradio>=6.31,<7
+huggingface-hub>=0.30
+numpy>=1.26
+opencv-python-headless>=4.10
+Pillow>=10
+torch>=2.2
+transformers>=4.45
+ultralytics>=8.3
