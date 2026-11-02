@@ -1,0 +1,6 @@
+ultralytics>=8.4,<9
+transformers==4.47.1
+torch
+torchvision
+opencv-python-headless
+huggingface-hub
